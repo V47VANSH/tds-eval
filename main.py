@@ -5,6 +5,7 @@ import asyncio
 import sys
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import logging
@@ -18,7 +19,8 @@ SETTINGS = {
     "SHARED_SECRET": os.getenv("SHARED_SECRET"),
     # "STUDENT_API_ENDPOINT": "http://127.0.0.1:8000/task",
     # "SHARED_SECRET": "your_secret_key_here",
-    # "EVALUATION_URL": "http://127.0.0.1:8002/notify"
+    # "EVALUATION_URL": "http://127.0.0.1:8002/notify",
+    "ALLOWED_ORIGINS": os.getenv("ALLOWED_ORIGINS", "*").split(",")
 }
 
 # Basic Logging
@@ -133,6 +135,16 @@ app = FastAPI(
     description="An application to send tasks to a student's API and evaluate the submissions.",
 )
 
+allowed_origins = [origin.strip() for origin in SETTINGS["ALLOWED_ORIGINS"] if origin.strip()] or ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- UI HTML ---
 def get_html_content():
     """Generates the HTML for the UI."""
@@ -172,19 +184,24 @@ def get_html_content():
         </div>
         <div class="container">
             <h2>Evaluation Results</h2>
+            <button id="eval-again-btn" onclick="evalAgain()" disabled>Eval Again</button>
             <pre id="results-display">Awaiting submission...</pre>
         </div>
 
         <script>
             let pollInterval;
+            let currentTaskId = null;
 
             async function runTest(testCaseId, roundId) {{
                 if (pollInterval) clearInterval(pollInterval);
 
                 const requestDisplay = document.getElementById('request-display');
                 const resultsDisplay = document.getElementById('results-display');
+                const evalAgainButton = document.getElementById('eval-again-btn');
                 requestDisplay.textContent = 'Sending request...';
                 resultsDisplay.textContent = 'Awaiting submission...';
+                evalAgainButton.disabled = true;
+                currentTaskId = null;
 
                 try {{
                     const response = await fetch(`/start-test/${{testCaseId}}/${{roundId}}`, {{ method: 'POST' }});
@@ -195,6 +212,7 @@ def get_html_content():
                     }}
                     const data = await response.json();
                     const taskId = data.task_id;
+                    currentTaskId = taskId;
                     
                     pollResults(taskId);
 
@@ -206,6 +224,7 @@ def get_html_content():
             async function pollResults(taskId) {{
                 const requestDisplay = document.getElementById('request-display');
                 const resultsDisplay = document.getElementById('results-display');
+                const evalAgainButton = document.getElementById('eval-again-btn');
 
                 pollInterval = setInterval(async () => {{
                     try {{
@@ -222,13 +241,40 @@ def get_html_content():
 
                         const status = resultData.evaluation.status;
                         if (status === 'completed' || status.includes('failed')) {{
+                            evalAgainButton.disabled = status !== 'completed';
                             clearInterval(pollInterval);
+                        }} else {{
+                            evalAgainButton.disabled = true;
                         }}
                     }} catch (error) {{
                         resultsDisplay.textContent = `Error polling for results: ${{error}}`;
                         clearInterval(pollInterval);
                     }}
                 }}, 2000); // Poll every 2 seconds
+            }}
+
+            async function evalAgain() {{
+                if (!currentTaskId) {{
+                    return;
+                }}
+                if (pollInterval) clearInterval(pollInterval);
+
+                const resultsDisplay = document.getElementById('results-display');
+                const evalAgainButton = document.getElementById('eval-again-btn');
+                resultsDisplay.textContent = 'Restarting evaluation...';
+                evalAgainButton.disabled = true;
+
+                try {{
+                    const response = await fetch(`/re-evaluate/${{currentTaskId}}`, {{ method: 'POST' }});
+                    if (!response.ok) {{
+                        const error = await response.json();
+                        resultsDisplay.textContent = `Error restarting evaluation: ${{JSON.stringify(error, null, 2)}}`;
+                        return;
+                    }}
+                    pollResults(currentTaskId);
+                }} catch (error) {{
+                    resultsDisplay.textContent = `Failed to restart evaluation: ${{error}}`;
+                }}
             }}
         </script>
     </body>
@@ -410,6 +456,40 @@ async def notify_endpoint(submission: StudentSubmission, background_tasks: Backg
     )
 
     return {"status": "accepted", "detail": "Evaluation has started."}
+
+
+@app.post("/re-evaluate/{task_id}")
+async def re_evaluate(task_id: str, background_tasks: BackgroundTasks):
+    """Re-run the evaluation for a task using the last submitted deployment."""
+    if task_id not in DB:
+        raise HTTPException(status_code=404, detail="Task ID not found.")
+
+    task_entry = DB[task_id]
+    submission_data = task_entry["evaluation"].get("submission_data")
+    if not submission_data:
+        raise HTTPException(status_code=400, detail="No submission data available to evaluate.")
+
+    pages_url = submission_data.get("pages_url")
+    if not pages_url:
+        raise HTTPException(status_code=400, detail="Submission does not include a pages_url.")
+
+    logging.info(f"Re-running evaluation for task {task_id} at URL: {pages_url}")
+
+    # Reset evaluation state and start a fresh run
+    eval_entry = task_entry["evaluation"]
+    eval_entry["status"] = "re-evaluating"
+    eval_entry["evaluation_completed_at"] = None
+    eval_entry["check_results"] = []
+    eval_entry["submitted_at"] = datetime.now()
+
+    background_tasks.add_task(
+        run_evaluation_checks,
+        pages_url=pages_url,
+        checks=task_entry["request"]["checks"],
+        task_id=task_id
+    )
+
+    return {"status": "accepted", "detail": "Re-evaluation started."}
 
 
 @app.get("/results")
