@@ -36,6 +36,11 @@ DB: Dict[str, Dict[str, Any]] = {}
 # --- Pydantic Models ---
 # Models for data validation and serialization.
 
+class Attachment(BaseModel):
+    filename: str
+    content: str
+
+
 class TaskRequest(BaseModel):
     email: str
     secret: str
@@ -45,7 +50,7 @@ class TaskRequest(BaseModel):
     brief: str
     checks: List[str]
     evaluation_url: str
-    attachments: Dict[str, str]  # Changed from List[Attachment] to Dict[str, str]
+    attachments: List[Attachment]
 
 class StudentSubmission(BaseModel):
     email: str
@@ -82,7 +87,7 @@ TEST_CASES: Dict[str, Dict[int, Dict]] = {
                 "Page contains an element with id '#total-sales'",
                 "The text content of '#total-sales' is '650.75'"
             ],
-            "attachments": {"sales.csv": "data:text/csv;base64,cHJvZHVjdCxzYWxlcwpBcHAyMCwxNTAuNTAKQmFuYW5hLDIwMC4yNQpDaGVycnksMzAw"}
+            "attachments": [{"filename": "sales.csv", "content": "data:text/csv;base64,cHJvZHVjdCxzYWxlcwpBcHAyMCwxNTAuNTAKQmFuYW5hLDIwMC4yNQpDaGVycnksMzAw"}]
         },
         2: {
             "task": "sales-report-a8b3d",
@@ -93,7 +98,7 @@ TEST_CASES: Dict[str, Dict[int, Dict]] = {
                 "Table has at least 3 data rows",
                 "The text content of '#total-sales' remains '650.75'"
             ],
-            "attachments": {"sales.csv": "data:text/csv;base64,cHJvZHVjdCxzYWxlcwpBcHAyMCwxNTAuNTAKQmFuYW5hLDIwMC4yNQpDaGVycnksMzAw"}
+            "attachments": [{"filename": "sales.csv", "content": "data:text/csv;base64,cHJvZHVjdCxzYWxlcwpBcHAyMCwxNTAuNTAKQmFuYW5hLDIwMC4yNQpDaGVycnksMzAw"}]
         }
     },
     "github-user-info": {
@@ -105,7 +110,7 @@ TEST_CASES: Dict[str, Dict[int, Dict]] = {
                 "Page has an input with id '#username-input' and a button with id '#fetch-btn'",
                 "After entering 'octocat' and clicking the button, '#creation-date' contains '2011-01-25'"
             ],
-            "attachments": {}
+            "attachments": []
         },
         2: {
             "task": "github-user-info-c7e4f",
@@ -115,7 +120,7 @@ TEST_CASES: Dict[str, Dict[int, Dict]] = {
                 "When fetching user 'octocat', '#api-status' shows 'Loading...' and then becomes empty.",
                 "When fetching a user that does not exist like 'nonexistentuser123456789', '#api-status' displays 'User not found'."
             ],
-            "attachments": {}
+            "attachments": []
         }
     },
     # ... Add other test cases here ...
